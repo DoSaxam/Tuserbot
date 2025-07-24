@@ -19,7 +19,7 @@ class ControlBot:
         # Commands
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("menu", self.main_menu))
-        self.application.add_handler(CommandHandler("tasks", self.view_tasks))
+        self.application.add_handler(CommandHandler("tasks", self.view_tasks_menu))  # 🔥 FIXED: view_tasks → view_tasks_menu
         self.application.add_handler(CommandHandler("help", self.help_command))
         
         # Callbacks
@@ -37,12 +37,16 @@ class ControlBot:
             await update.message.reply_text("❌ Unauthorized access!")
             return
         
+        # Add safety check for userbot attributes
+        userbot_running = hasattr(userbot, 'is_running') and userbot.is_running
+        active_tasks_count = len(userbot.active_tasks) if hasattr(userbot, 'active_tasks') else 0
+        
         welcome_text = f"""
 🤖 **Telegram Auto-Forwarder Control Bot**
 
 ✅ Bot Active & Ready
-🔄 Userbot Status: {"🟢 Running" if userbot.is_running else "🔴 Stopped"}
-📊 Active Tasks: {len(userbot.active_tasks)}
+🔄 Userbot Status: {"🟢 Running" if userbot_running else "🔴 Stopped"}
+📊 Active Tasks: {active_tasks_count}
 
 **Quick Commands:**
 /menu - Main control panel
@@ -110,12 +114,17 @@ Use /menu to access all features with buttons!
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        status_emoji = "🟢" if userbot.is_running else "🔴"
+        
+        # Add safety checks
+        userbot_running = hasattr(userbot, 'is_running') and userbot.is_running
+        active_tasks_count = len(userbot.active_tasks) if hasattr(userbot, 'active_tasks') else 0
+        status_emoji = "🟢" if userbot_running else "🔴"
+        
         text = f"""
 🎛️ **Control Panel**
 
-🤖 Userbot Status: {status_emoji} {"Running" if userbot.is_running else "Stopped"}
-📊 Active Tasks: {len(userbot.active_tasks)}
+🤖 Userbot Status: {status_emoji} {"Running" if userbot_running else "Stopped"}
+📊 Active Tasks: {active_tasks_count}
 ⚡ System: Online
 
 Select an option below:
@@ -133,31 +142,35 @@ Select an option below:
         
         data = query.data
         
-        if data == "add_task":
-            await self.add_task_menu(update, context)
-        elif data == "view_tasks":
-            await self.view_tasks_menu(update, context)
-        elif data == "manage_tasks":
-            await self.manage_tasks_menu(update, context)
-        elif data == "stats":
-            await self.show_statistics(update, context)
-        elif data == "restart_userbot":
-            await self.restart_userbot(update, context)
-        elif data == "stop_userbot":
-            await self.stop_userbot_action(update, context)
-        elif data == "help_menu":
-            await self.help_menu(update, context)
-        elif data == "back_to_menu":
-            await self.main_menu(update, context)
-        elif data.startswith("toggle_task_"):
-            task_id = int(data.replace("toggle_task_", ""))
-            await self.toggle_task(update, context, task_id)
-        elif data.startswith("delete_task_"):
-            task_id = int(data.replace("delete_task_", ""))
-            await self.delete_task_action(update, context, task_id)
-        elif data.startswith("confirm_delete_"):
-            task_id = int(data.replace("confirm_delete_", ""))
-            await self.confirm_delete_task(update, context, task_id)
+        try:
+            if data == "add_task":
+                await self.add_task_menu(update, context)
+            elif data == "view_tasks":
+                await self.view_tasks_menu(update, context)
+            elif data == "manage_tasks":
+                await self.manage_tasks_menu(update, context)
+            elif data == "stats":
+                await self.show_statistics(update, context)
+            elif data == "restart_userbot":
+                await self.restart_userbot(update, context)
+            elif data == "stop_userbot":
+                await self.stop_userbot_action(update, context)
+            elif data == "help_menu":
+                await self.help_menu(update, context)
+            elif data == "back_to_menu":
+                await self.main_menu(update, context)
+            elif data.startswith("toggle_task_"):
+                task_id = int(data.replace("toggle_task_", ""))
+                await self.toggle_task(update, context, task_id)
+            elif data.startswith("delete_task_"):
+                task_id = int(data.replace("delete_task_", ""))
+                await self.delete_task_action(update, context, task_id)
+            elif data.startswith("confirm_delete_"):
+                task_id = int(data.replace("confirm_delete_", ""))
+                await self.confirm_delete_task(update, context, task_id)
+        except Exception as e:
+            logger.error(f"Error in callback handler: {e}")
+            await query.answer("❌ An error occurred!")
     
     async def add_task_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Add new forwarding task"""
@@ -166,14 +179,11 @@ Select an option below:
 
 📝 Send task details in this format:
 source_chat_id target_chat_id [task_name]
-
-text
-
-**Examples:**
+        **Examples:**
 -1001234567890 -1009876543210 EarnKaro Task
 @source_channel @target_bot My Forward Task
 -1001111111111 -1002222222222
-
+        
 **How to get Chat IDs:**
 • Forward message to @userinfobot
 • Use @myidbot for user/group IDs
@@ -190,68 +200,80 @@ Send your task details or /cancel to go back.
     
     async def view_tasks_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """View all forwarding tasks"""
-        tasks = await db.get_all_tasks()
-        
-        if not tasks:
-            text = "📋 **No Tasks Found**\n\nUse ➕ Add New Task to create your first forwarding task."
-            keyboard = [
-                [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-            ]
-        else:
-            text = f"📋 **All Forwarding Tasks** ({len(tasks)})\n\n"
-            keyboard = []
+        try:
+            tasks = await db.get_all_tasks()
             
-            for i, task in enumerate(tasks, 1):
-                status_emoji = "🟢" if task.status == "active" else "🔴"
-                text += f"{i}. {status_emoji} **{task.task_name}**\n"
-                text += f"   📤 Source: `{task.source_chat}`\n"
-                text += f"   📥 Target: `{task.dest_chat}`\n"
-                text += f"   📅 Created: {task.created_at.strftime('%d/%m/%Y')}\n\n"
+            if not tasks:
+                text = "📋 **No Tasks Found**\n\nUse ➕ Add New Task to create your first forwarding task."
+                keyboard = [
+                    [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
+                    [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
+                ]
+            else:
+                text = f"📋 **All Forwarding Tasks** ({len(tasks)})\n\n"
+                keyboard = []
                 
-                if i <= 10:  # Show buttons only for first 10 tasks
-                    keyboard.append([
-                        InlineKeyboardButton(f"⚙️ {task.task_name[:15]}...", callback_data=f"edit_task_{task.id}"),
-                        InlineKeyboardButton("🔄", callback_data=f"toggle_task_{task.id}"),
-                        InlineKeyboardButton("🗑️", callback_data=f"delete_task_{task.id}")
-                    ])
-        
-        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+                for i, task in enumerate(tasks, 1):
+                    status_emoji = "🟢" if task.status == "active" else "🔴"
+                    text += f"{i}. {status_emoji} **{task.task_name}**\n"
+                    text += f"   📤 Source: `{task.source_chat}`\n"
+                    text += f"   📥 Target: `{task.dest_chat}`\n"
+                    text += f"   📅 Created: {task.created_at.strftime('%d/%m/%Y')}\n\n"
+                    
+                    if i <= 10:  # Show buttons only for first 10 tasks
+                        keyboard.append([
+                            InlineKeyboardButton(f"⚙️ {task.task_name[:15]}...", callback_data=f"edit_task_{task.id}"),
+                            InlineKeyboardButton("🔄", callback_data=f"toggle_task_{task.id}"),
+                            InlineKeyboardButton("🗑️", callback_data=f"delete_task_{task.id}")
+                        ])
+            
+            keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Error in view_tasks_menu: {e}")
+            await update.callback_query.answer("❌ Failed to load tasks!")
     
     async def manage_tasks_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Manage tasks menu"""
-        active_tasks = [t for t in userbot.active_tasks.values() if t['status'] == 'active']
-        
-        text = f"""
+        try:
+            all_tasks = await db.get_all_tasks()
+            active_tasks = [t for t in all_tasks if t.status == "active"]
+            userbot_running = hasattr(userbot, 'is_running') and userbot.is_running
+            
+            text = f"""
 ⚙️ **Task Management**
 
 📊 **Current Status:**
-• Total Tasks: {len(await db.get_all_tasks())}
+• Total Tasks: {len(all_tasks)}
 • Active Tasks: {len(active_tasks)}
-• Userbot Status: {"🟢 Running" if userbot.is_running else "🔴 Stopped"}
+• Userbot Status: {"🟢 Running" if userbot_running else "🔴 Stopped"}
 
 **Quick Actions:**
-        """
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("▶️ Start All Tasks", callback_data="start_all_tasks"),
-                InlineKeyboardButton("⏸️ Pause All Tasks", callback_data="pause_all_tasks")
-            ],
-            [
-                InlineKeyboardButton("🗑️ Clear Inactive", callback_data="clear_inactive"),
-                InlineKeyboardButton("🔄 Reload Tasks", callback_data="reload_tasks")
-            ],
-            [
-                InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")
+            """
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("▶️ Start All Tasks", callback_data="start_all_tasks"),
+                    InlineKeyboardButton("⏸️ Pause All Tasks", callback_data="pause_all_tasks")
+                ],
+                [
+                    InlineKeyboardButton("🗑️ Clear Inactive", callback_data="clear_inactive"),
+                    InlineKeyboardButton("🔄 Reload Tasks", callback_data="reload_tasks")
+                ],
+                [
+                    InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")
+                ]
             ]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Error in manage_tasks_menu: {e}")
+            await update.callback_query.answer("❌ Failed to load task management!")
     
     async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle text messages"""
@@ -290,6 +312,11 @@ Send your task details or /cancel to go back.
                 await update.message.reply_text("❌ Invalid chat IDs provided! Please check and try again.")
                 return
             
+            # Check if userbot has the required method
+            if not hasattr(userbot, 'add_forwarding_task'):
+                await update.message.reply_text("❌ Userbot service not ready! Please try again later.")
+                return
+            
             task_id = await userbot.add_forwarding_task(source_id, target_id, task_name)
             if task_id:
                 await update.message.reply_text(
@@ -315,8 +342,12 @@ Send your task details or /cancel to go back.
         try:
             if chat_input.startswith('@'):
                 # Username - try to get chat info
-                chat = await userbot.app.get_chat(chat_input)
-                return chat.id
+                if hasattr(userbot, 'app'):
+                    chat = await userbot.app.get_chat(chat_input)
+                    return chat.id
+                else:
+                    logger.error("Userbot app not available for chat resolution")
+                    return None
             else:
                 # Assume it's already a chat ID
                 return int(chat_input)
@@ -331,10 +362,14 @@ Send your task details or /cancel to go back.
             if task:
                 new_status = "inactive" if task.status == "active" else "active"
                 
-                if new_status == "active":
+                # Check if userbot methods exist
+                if new_status == "active" and hasattr(userbot, 'enable_task'):
                     success = await userbot.enable_task(task_id)
-                else:
+                elif new_status == "inactive" and hasattr(userbot, 'disable_task'):
                     success = await userbot.disable_task(task_id)
+                else:
+                    await update.callback_query.answer("❌ Userbot service not ready!")
+                    return
                 
                 if success:
                     status_text = "✅ Enabled" if new_status == "active" else "⏸️ Paused"
@@ -350,9 +385,10 @@ Send your task details or /cancel to go back.
     
     async def delete_task_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE, task_id: int):
         """Confirm task deletion"""
-        task = await db.get_task_by_id(task_id)
-        if task:
-            text = f"""
+        try:
+            task = await db.get_task_by_id(task_id)
+            if task:
+                text = f"""
 🗑️ **Confirm Deletion**
 
 Are you sure you want to delete this task?
@@ -362,27 +398,35 @@ Are you sure you want to delete this task?
 📥 **Target:** `{task.dest_chat}`
 
 ⚠️ This action cannot be undone!
-            """
-            
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Yes, Delete", callback_data=f"confirm_delete_{task_id}"),
-                    InlineKeyboardButton("❌ Cancel", callback_data="view_tasks")
+                """
+                
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Yes, Delete", callback_data=f"confirm_delete_{task_id}"),
+                        InlineKeyboardButton("❌ Cancel", callback_data="view_tasks")
+                    ]
                 ]
-            ]
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            else:
+                await update.callback_query.answer("❌ Task not found!")
+        except Exception as e:
+            logger.error(f"Error in delete_task_action: {e}")
+            await update.callback_query.answer("❌ Error occurred!")
     
     async def confirm_delete_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE, task_id: int):
         """Delete forwarding task"""
         try:
-            success = await userbot.delete_task(task_id)
-            if success:
-                await update.callback_query.answer("🗑️ Task Deleted Successfully!")
-                await self.view_tasks_menu(update, context)
+            if hasattr(userbot, 'delete_task'):
+                success = await userbot.delete_task(task_id)
+                if success:
+                    await update.callback_query.answer("🗑️ Task Deleted Successfully!")
+                    await self.view_tasks_menu(update, context)
+                else:
+                    await update.callback_query.answer("❌ Failed to delete task!")
             else:
-                await update.callback_query.answer("❌ Failed to delete task!")
+                await update.callback_query.answer("❌ Userbot service not ready!")
         except Exception as e:
             logger.error(f"Error deleting task: {e}")
             await update.callback_query.answer("❌ Error occurred!")
@@ -391,10 +435,15 @@ Are you sure you want to delete this task?
         """Restart userbot"""
         try:
             await update.callback_query.answer("🔄 Restarting userbot...")
-            await userbot.restart_userbot()
-            await asyncio.sleep(2)
             
-            text = "✅ **Userbot Restarted Successfully!**\n\n🔄 All tasks reloaded and ready to forward."
+            if hasattr(userbot, 'restart_userbot'):
+                await userbot.restart_userbot()
+                await asyncio.sleep(2)
+                
+                text = "✅ **Userbot Restarted Successfully!**\n\n🔄 All tasks reloaded and ready to forward."
+            else:
+                text = "❌ **Restart Failed!**\n\nUserbot service not available."
+            
             keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -407,9 +456,13 @@ Are you sure you want to delete this task?
         """Stop userbot"""
         try:
             await update.callback_query.answer("🛑 Stopping userbot...")
-            await userbot.stop_userbot()
             
-            text = "🛑 **Userbot Stopped**\n\n⚠️ No messages will be forwarded until restart."
+            if hasattr(userbot, 'stop_userbot'):
+                await userbot.stop_userbot()
+                text = "🛑 **Userbot Stopped**\n\n⚠️ No messages will be forwarded until restart."
+            else:
+                text = "❌ **Stop Failed!**\n\nUserbot service not available."
+            
             keyboard = [
                 [InlineKeyboardButton("🔄 Restart", callback_data="restart_userbot")],
                 [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
@@ -427,13 +480,14 @@ Are you sure you want to delete this task?
             all_tasks = await db.get_all_tasks()
             active_tasks = [t for t in all_tasks if t.status == "active"]
             inactive_tasks = [t for t in all_tasks if t.status == "inactive"]
+            userbot_running = hasattr(userbot, 'is_running') and userbot.is_running
             
             text = f"""
 📊 **System Statistics**
 
 🤖 **Bot Status:**
 • Control Bot: 🟢 Online
-• Userbot: {"🟢 Running" if userbot.is_running else "🔴 Stopped"}
+• Userbot: {"🟢 Running" if userbot_running else "🔴 Stopped"}
 
 📋 **Tasks Overview:**
 • Total Tasks: {len(all_tasks)}
@@ -502,7 +556,11 @@ This is an auto-forwarding bot that instantly forwards messages from source chan
     def start_bot(self):
         """Start the control bot"""
         logger.info("🤖 Starting control bot...")
-        self.application.run_polling(drop_pending_updates=True)
+        try:
+            self.application.run_polling(drop_pending_updates=True)
+        except Exception as e:
+            logger.error(f"❌ Control bot failed to start: {e}")
+            raise
 
 # Global control bot instance
 control_bot = ControlBot()
