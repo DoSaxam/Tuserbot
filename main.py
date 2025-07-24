@@ -27,7 +27,6 @@ class TelegramForwarderSystem:
         self.running = True
         self.userbot_task = None
         self.flask_thread = None
-        self.control_bot_thread = None
         self.start_time = time.time()
         
     def check_environment_variables(self):
@@ -43,7 +42,6 @@ class TelegramForwarderSystem:
         for var in required_vars:
             value = os.getenv(var)
             if value:
-                # Mask sensitive data in logs
                 if var in ['SESSION_STRING', 'BOT_TOKEN', 'POSTGRES_DSN']:
                     logger.info(f"✅ {var}: {'*' * 20}")
                 else:
@@ -52,7 +50,6 @@ class TelegramForwarderSystem:
                 missing_vars.append(var)
                 logger.error(f"❌ {var}: MISSING!")
         
-        # Check optional variables
         port = os.getenv("PORT", "10000")
         keep_alive_url = os.getenv("KEEP_ALIVE_URL", "Not set")
         logger.info(f"🔌 PORT: {port}")
@@ -83,16 +80,22 @@ class TelegramForwarderSystem:
             logger.info("✅ Userbot service started successfully")
         except Exception as e:
             logger.error(f"❌ Userbot service failed to start: {e}")
-            # Retry after delay
             logger.info("⏳ Retrying userbot start in 10 seconds...")
             await asyncio.sleep(10)
             await self.start_userbot_service()
     
     def start_control_bot_service(self):
-        """Start control bot in separate thread"""
+        """Start control bot with proper event loop handling"""
         try:
             logger.info("🎛️ Starting control bot service...")
+            
+            # 🔥 FIX: Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Start control bot in this thread's event loop
             control_bot.start_bot()
+            
         except Exception as e:
             logger.error(f"❌ Control bot service error: {e}")
     
@@ -107,7 +110,6 @@ class TelegramForwarderSystem:
             # Wait for Flask to initialize properly
             time.sleep(4)
             
-            # Verify Flask thread is running
             if self.flask_thread and self.flask_thread.is_alive():
                 logger.info("✅ Keep-alive service started successfully")
                 logger.info("✅ Flask server is running and port should be detected")
@@ -117,7 +119,7 @@ class TelegramForwarderSystem:
                 
         except Exception as e:
             logger.error(f"❌ Keep-alive service failed: {e}")
-            raise  # Re-raise to stop deployment if Flask fails
+            raise
     
     async def monitor_services(self):
         """Monitor all services and restart if needed"""
@@ -146,8 +148,7 @@ class TelegramForwarderSystem:
                 active_tasks = len(userbot.active_tasks) if hasattr(userbot, 'active_tasks') else 0
                 logger.info(f"💚 System healthy - Uptime: {uptime:.0f}s, Tasks: {active_tasks}")
                 
-                # Wait before next check
-                await asyncio.sleep(30)  # Check every 30 seconds
+                await asyncio.sleep(30)
                 
             except Exception as e:
                 logger.error(f"❌ Monitoring error: {e}")
@@ -160,33 +161,33 @@ class TelegramForwarderSystem:
         logger.info(f"🐍 Python version: {sys.version}")
         
         try:
-            # 🔥 STEP 1: Check environment variables FIRST
+            # Step 1: Check environment variables
             logger.info("🔍 Step 1: Environment validation...")
             if not self.check_environment_variables():
                 logger.error("❌ Environment check failed! Stopping deployment.")
                 sys.exit(1)
             
-            # 🔥 STEP 2: Start Flask server FIRST (Critical for Render)
+            # Step 2: Start Flask server FIRST
             logger.info("🌐 Step 2: Starting Flask server (CRITICAL for port detection)...")
             self.start_keep_alive_service()
             
-            # 🔥 STEP 3: Initialize database
+            # Step 3: Initialize database
             logger.info("🗄️ Step 3: Database initialization...")
             await self.initialize_database()
             
-            # 🔥 STEP 4: Start userbot
+            # Step 4: Start userbot
             logger.info("🤖 Step 4: Starting userbot service...")
             self.userbot_task = asyncio.create_task(self.start_userbot_service())
             
-            # 🔥 STEP 5: Start control bot
+            # Step 5: Start control bot in separate thread with event loop
             logger.info("🎛️ Step 5: Starting control bot...")
-            self.control_bot_thread = threading.Thread(
+            control_bot_thread = threading.Thread(
                 target=self.start_control_bot_service, 
                 daemon=True
             )
-            self.control_bot_thread.start()
+            control_bot_thread.start()
             
-            # Wait for all services to initialize
+            # Wait for services to initialize
             await asyncio.sleep(8)
             
             logger.info("✅ All services started successfully!")
@@ -208,12 +209,10 @@ class TelegramForwarderSystem:
         self.running = False
         
         try:
-            # Stop userbot
             if hasattr(userbot, 'is_running') and userbot.is_running:
                 await userbot.stop_userbot()
                 logger.info("✅ Userbot stopped")
             
-            # Cancel userbot task
             if self.userbot_task and not self.userbot_task.done():
                 self.userbot_task.cancel()
                 try:
@@ -229,7 +228,6 @@ class TelegramForwarderSystem:
     def handle_signal(self, signum, frame):
         """Handle system signals"""
         logger.info(f"📡 Received signal {signum} - initiating shutdown")
-        # Create new event loop for shutdown
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(self.shutdown_system())
@@ -241,15 +239,12 @@ async def main():
     logger.info("🚀 RENDER DEPLOYMENT VERSION")
     logger.info("=" * 60)
     
-    # Create system instance
     system = TelegramForwarderSystem()
     
-    # Setup signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, system.handle_signal)
     signal.signal(signal.SIGTERM, system.handle_signal)
     
     try:
-        # Start the complete system
         await system.start_system()
         
     except KeyboardInterrupt:
@@ -263,7 +258,6 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        # Check Python version
         if sys.version_info < (3, 8):
             logger.error("❌ Python 3.8+ required")
             sys.exit(1)
@@ -271,7 +265,6 @@ if __name__ == "__main__":
         logger.info(f"🐍 Python {sys.version}")
         logger.info("🚀 Starting application...")
         
-        # Run the main application
         asyncio.run(main())
         
     except KeyboardInterrupt:
