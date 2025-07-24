@@ -52,15 +52,17 @@ class TelegramForwarderSystem:
                 missing_vars.append(var)
                 logger.error(f"❌ {var}: MISSING!")
         
-        # Check optional PORT variable
+        # Check optional variables
         port = os.getenv("PORT", "10000")
+        keep_alive_url = os.getenv("KEEP_ALIVE_URL", "Not set")
         logger.info(f"🔌 PORT: {port}")
+        logger.info(f"🌐 KEEP_ALIVE_URL: {keep_alive_url}")
         
         if missing_vars:
             logger.error(f"❌ Missing required environment variables: {missing_vars}")
             return False
         
-        logger.info("✅ All environment variables are properly set")
+        logger.info("✅ All required environment variables are properly set")
         return True
         
     async def initialize_database(self):
@@ -98,21 +100,24 @@ class TelegramForwarderSystem:
         """Start keep-alive service with Flask server"""
         try:
             logger.info("🔄 Starting keep-alive service...")
+            logger.info("🌐 Initializing Flask server for port detection...")
+            
             self.flask_thread = start_keep_alive_system()
             
-            # Wait a moment for Flask to initialize
-            time.sleep(3)
+            # Wait for Flask to initialize properly
+            time.sleep(4)
             
-            # Check if Flask thread is alive
+            # Verify Flask thread is running
             if self.flask_thread and self.flask_thread.is_alive():
                 logger.info("✅ Keep-alive service started successfully")
+                logger.info("✅ Flask server is running and port should be detected")
             else:
                 logger.error("❌ Keep-alive service failed to start properly")
                 raise Exception("Flask server failed to start")
                 
         except Exception as e:
             logger.error(f"❌ Keep-alive service failed: {e}")
-            raise
+            raise  # Re-raise to stop deployment if Flask fails
     
     async def monitor_services(self):
         """Monitor all services and restart if needed"""
@@ -121,7 +126,7 @@ class TelegramForwarderSystem:
         while self.running:
             try:
                 # Check userbot status
-                if not userbot.is_running:
+                if hasattr(userbot, 'is_running') and not userbot.is_running:
                     logger.warning("⚠️ Userbot is not running, attempting restart...")
                     try:
                         await self.start_userbot_service()
@@ -155,36 +160,39 @@ class TelegramForwarderSystem:
         logger.info(f"🐍 Python version: {sys.version}")
         
         try:
-            # Check environment variables first
+            # 🔥 STEP 1: Check environment variables FIRST
+            logger.info("🔍 Step 1: Environment validation...")
             if not self.check_environment_variables():
-                logger.error("❌ Environment check failed!")
+                logger.error("❌ Environment check failed! Stopping deployment.")
                 sys.exit(1)
             
-            # 🔥 CRITICAL: Start Flask server FIRST for port detection
-            logger.info("🌐 Starting Flask server (critical for Render port detection)...")
+            # 🔥 STEP 2: Start Flask server FIRST (Critical for Render)
+            logger.info("🌐 Step 2: Starting Flask server (CRITICAL for port detection)...")
             self.start_keep_alive_service()
             
-            # Initialize database
+            # 🔥 STEP 3: Initialize database
+            logger.info("🗄️ Step 3: Database initialization...")
             await self.initialize_database()
             
-            # Start userbot
-            logger.info("🤖 Starting userbot...")
+            # 🔥 STEP 4: Start userbot
+            logger.info("🤖 Step 4: Starting userbot service...")
             self.userbot_task = asyncio.create_task(self.start_userbot_service())
             
-            # Start control bot in separate thread
-            logger.info("🎛️ Starting control bot...")
+            # 🔥 STEP 5: Start control bot
+            logger.info("🎛️ Step 5: Starting control bot...")
             self.control_bot_thread = threading.Thread(
                 target=self.start_control_bot_service, 
                 daemon=True
             )
             self.control_bot_thread.start()
             
-            # Wait for services to initialize
+            # Wait for all services to initialize
             await asyncio.sleep(8)
             
             logger.info("✅ All services started successfully!")
             logger.info("🎯 System is now operational and ready to forward messages")
-            logger.info(f"🌐 Service available at: {os.getenv('KEEP_ALIVE_URL', 'Not configured')}")
+            logger.info(f"🌐 Service available at: {os.getenv('KEEP_ALIVE_URL', 'URL not configured')}")
+            logger.info(f"🔌 Running on port: {os.getenv('PORT', '10000')}")
             
             # Start monitoring services
             await self.monitor_services()
@@ -221,7 +229,7 @@ class TelegramForwarderSystem:
     def handle_signal(self, signum, frame):
         """Handle system signals"""
         logger.info(f"📡 Received signal {signum} - initiating shutdown")
-        # Create shutdown task in event loop
+        # Create new event loop for shutdown
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(self.shutdown_system())
@@ -230,6 +238,7 @@ async def main():
     """Main application entry point"""
     logger.info("=" * 60)
     logger.info("🤖 TELEGRAM AUTO-FORWARDER SYSTEM")
+    logger.info("🚀 RENDER DEPLOYMENT VERSION")
     logger.info("=" * 60)
     
     # Create system instance
