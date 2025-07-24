@@ -6,7 +6,3 @@ SQLAlchemy
 asyncpg
 requests
 python-dotenv
-asyncio
-logging
-threading
-signal
