@@ -5,7 +5,10 @@ import signal
 import sys
 import time
 import os
-from datetime import datetime
+from userbot import userbot
+from control_bot import control_bot
+from keep_alive import start_keep_alive_system
+from database import db
 
 # Configure comprehensive logging
 logging.basicConfig(
@@ -26,282 +29,189 @@ class TelegramForwarderSystem:
         self.flask_thread = None
         self.control_bot_thread = None
         self.start_time = time.time()
-        self.system_healthy = False
         
     def check_environment_variables(self):
         """Check all required environment variables"""
-        required_vars = {
-            'API_ID': 'Telegram API ID',
-            'API_HASH': 'Telegram API Hash',
-            'SESSION_STRING': 'Pyrogram Session String',
-            'BOT_TOKEN': 'Telegram Bot Token',
-            'OWNER_ID': 'Telegram User ID',
-            'POSTGRES_DSN': 'PostgreSQL Database URL'
-        }
+        logger.info("🔍 Checking environment variables...")
+        
+        required_vars = [
+            'API_ID', 'API_HASH', 'SESSION_STRING', 
+            'BOT_TOKEN', 'OWNER_ID', 'POSTGRES_DSN'
+        ]
         
         missing_vars = []
-        
-        for var, description in required_vars.items():
+        for var in required_vars:
             value = os.getenv(var)
             if value:
                 # Mask sensitive data in logs
                 if var in ['SESSION_STRING', 'BOT_TOKEN', 'POSTGRES_DSN']:
-                    masked_value = f"{value[:10]}..." if len(value) > 10 else "***"
-                    logger.info(f"✅ {var}: {masked_value} ({description})")
+                    logger.info(f"✅ {var}: {'*' * 20}")
                 else:
-                    logger.info(f"✅ {var}: {value} ({description})")
+                    logger.info(f"✅ {var}: {value}")
             else:
-                logger.error(f"❌ {var}: MISSING! ({description})")
                 missing_vars.append(var)
+                logger.error(f"❌ {var}: MISSING!")
         
-        # Optional variables
-        optional_vars = ['KEEP_ALIVE_URL', 'PORT']
-        for var in optional_vars:
-            value = os.getenv(var)
-            if value:
-                logger.info(f"✅ {var}: {value} (Optional)")
-            else:
-                logger.warning(f"⚠️ {var}: Not set (Optional)")
+        # Check optional PORT variable
+        port = os.getenv("PORT", "10000")
+        logger.info(f"🔌 PORT: {port}")
         
-        return len(missing_vars) == 0, missing_vars
-    
-    def start_flask_server(self):
-        """Start Flask server in separate thread"""
-        try:
-            logger.info("🌐 Starting Flask server thread...")
-            
-            from keep_alive import initialize_keep_alive_system, start_flask_server
-            
-            # Initialize keep-alive system first
-            if initialize_keep_alive_system():
-                logger.info("✅ Keep-alive system initialized")
-                
-                # Start Flask server
-                start_flask_server()
-            else:
-                logger.error("❌ Keep-alive system initialization failed")
-                raise Exception("Keep-alive system failed to initialize")
-                
-        except Exception as e:
-            logger.error(f"❌ Flask server thread error: {e}")
-            raise
-    
+        if missing_vars:
+            logger.error(f"❌ Missing required environment variables: {missing_vars}")
+            return False
+        
+        logger.info("✅ All environment variables are properly set")
+        return True
+        
     async def initialize_database(self):
         """Initialize database connection and tables"""
         try:
-            logger.info("🗄️ Initializing database connection...")
-            
-            from database import db
+            logger.info("🗄️ Initializing database...")
             await db.init_db()
-            
             logger.info("✅ Database initialized successfully")
-            return True
-            
         except Exception as e:
             logger.error(f"❌ Database initialization failed: {e}")
-            return False
+            raise
     
     async def start_userbot_service(self):
-        """Start userbot service with comprehensive error handling"""
+        """Start userbot service with error handling"""
         try:
             logger.info("🤖 Starting userbot service...")
-            
-            from userbot import userbot
             await userbot.start_userbot()
-            
-            if userbot.is_running:
-                logger.info("✅ Userbot service started successfully")
-                return True
-            else:
-                logger.error("❌ Userbot failed to start properly")
-                return False
-                
+            logger.info("✅ Userbot service started successfully")
         except Exception as e:
-            logger.error(f"❌ Userbot service startup error: {e}")
-            # Retry logic
-            logger.info("🔄 Retrying userbot startup in 10 seconds...")
+            logger.error(f"❌ Userbot service failed to start: {e}")
+            # Retry after delay
+            logger.info("⏳ Retrying userbot start in 10 seconds...")
             await asyncio.sleep(10)
-            try:
-                from userbot import userbot
-                await userbot.start_userbot()
-                return userbot.is_running
-            except Exception as retry_error:
-                logger.error(f"❌ Userbot retry failed: {retry_error}")
-                return False
+            await self.start_userbot_service()
     
     def start_control_bot_service(self):
         """Start control bot in separate thread"""
         try:
             logger.info("🎛️ Starting control bot service...")
-            
-            from control_bot import control_bot
             control_bot.start_bot()
-            
         except Exception as e:
             logger.error(f"❌ Control bot service error: {e}")
+    
+    def start_keep_alive_service(self):
+        """Start keep-alive service with Flask server"""
+        try:
+            logger.info("🔄 Starting keep-alive service...")
+            self.flask_thread = start_keep_alive_system()
+            
+            # Wait a moment for Flask to initialize
+            time.sleep(3)
+            
+            # Check if Flask thread is alive
+            if self.flask_thread and self.flask_thread.is_alive():
+                logger.info("✅ Keep-alive service started successfully")
+            else:
+                logger.error("❌ Keep-alive service failed to start properly")
+                raise Exception("Flask server failed to start")
+                
+        except Exception as e:
+            logger.error(f"❌ Keep-alive service failed: {e}")
             raise
     
-    async def monitor_system_health(self):
+    async def monitor_services(self):
         """Monitor all services and restart if needed"""
-        logger.info("📊 Starting system health monitoring...")
+        logger.info("📊 Starting service monitoring...")
         
         while self.running:
             try:
                 # Check userbot status
-                from userbot import userbot
-                
                 if not userbot.is_running:
                     logger.warning("⚠️ Userbot is not running, attempting restart...")
-                    restart_success = await self.start_userbot_service()
-                    if restart_success:
-                        logger.info("✅ Userbot restarted successfully")
-                    else:
-                        logger.error("❌ Failed to restart userbot")
+                    try:
+                        await self.start_userbot_service()
+                    except Exception as e:
+                        logger.error(f"Failed to restart userbot: {e}")
                 
                 # Check Flask server status
                 if self.flask_thread and not self.flask_thread.is_alive():
-                    logger.warning("⚠️ Flask server thread died, attempting restart...")
+                    logger.warning("⚠️ Flask server died, restarting...")
                     try:
-                        self.flask_thread = threading.Thread(target=self.start_flask_server, daemon=True)
-                        self.flask_thread.start()
-                        logger.info("✅ Flask server thread restarted")
+                        self.start_keep_alive_service()
                     except Exception as e:
-                        logger.error(f"❌ Failed to restart Flask server: {e}")
+                        logger.error(f"Failed to restart Flask server: {e}")
                 
-                # Log periodic health status
+                # Log periodic status
                 uptime = time.time() - self.start_time
-                uptime_str = str(datetime.fromtimestamp(uptime) - datetime.fromtimestamp(0))[:-7]
+                active_tasks = len(userbot.active_tasks) if hasattr(userbot, 'active_tasks') else 0
+                logger.info(f"💚 System healthy - Uptime: {uptime:.0f}s, Tasks: {active_tasks}")
                 
-                logger.info(f"💚 System Health Check - Uptime: {uptime_str}, Tasks: {len(userbot.active_tasks)}")
-                
-                self.system_healthy = True
-                
-                # Wait before next health check
-                await asyncio.sleep(60)  # Check every minute
+                # Wait before next check
+                await asyncio.sleep(30)  # Check every 30 seconds
                 
             except Exception as e:
-                logger.error(f"❌ Health monitoring error: {e}")
-                self.system_healthy = False
-                await asyncio.sleep(30)  # Shorter interval if errors
+                logger.error(f"❌ Monitoring error: {e}")
+                await asyncio.sleep(5)
     
-    async def start_complete_system(self):
-        """Start the complete forwarding system with proper sequencing"""
-        logger.info("=" * 60)
-        logger.info("🚀 TELEGRAM AUTO-FORWARDER SYSTEM STARTUP")
-        logger.info("=" * 60)
-        logger.info(f"📅 Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info(f"🐍 Python Version: {sys.version}")
-        logger.info(f"🌍 Environment: {os.getenv('RENDER_SERVICE_NAME', 'Local Development')}")
+    async def start_system(self):
+        """Start the complete forwarding system"""
+        logger.info("🚀 Starting Telegram Auto-Forwarder System...")
+        logger.info(f"📅 Start time: {time.ctime()}")
+        logger.info(f"🐍 Python version: {sys.version}")
         
         try:
-            # Step 1: Environment Variables Check
-            logger.info("🔍 Step 1: Checking environment variables...")
-            env_check, missing_vars = self.check_environment_variables()
-            
-            if not env_check:
-                logger.error(f"❌ Missing required environment variables: {missing_vars}")
-                logger.error("💡 Please set all required environment variables in Render dashboard")
+            # Check environment variables first
+            if not self.check_environment_variables():
+                logger.error("❌ Environment check failed!")
                 sys.exit(1)
             
-            logger.info("✅ Step 1 Complete: All environment variables verified")
+            # 🔥 CRITICAL: Start Flask server FIRST for port detection
+            logger.info("🌐 Starting Flask server (critical for Render port detection)...")
+            self.start_keep_alive_service()
             
-            # Step 2: Start Flask Server (Critical for Render port detection)
-            logger.info("🌐 Step 2: Starting Flask server for port binding...")
-            self.flask_thread = threading.Thread(target=self.start_flask_server, daemon=True)
-            self.flask_thread.start()
+            # Initialize database
+            await self.initialize_database()
             
-            # Wait for Flask server to bind to port
-            await asyncio.sleep(5)
+            # Start userbot
+            logger.info("🤖 Starting userbot...")
+            self.userbot_task = asyncio.create_task(self.start_userbot_service())
             
-            if self.flask_thread.is_alive():
-                logger.info("✅ Step 2 Complete: Flask server started and port bound")
-            else:
-                logger.error("❌ Step 2 Failed: Flask server failed to start")
-                sys.exit(1)
-            
-            # Step 3: Database Initialization
-            logger.info("🗄️ Step 3: Initializing database...")
-            db_success = await self.initialize_database()
-            
-            if not db_success:
-                logger.error("❌ Step 3 Failed: Database initialization failed")
-                sys.exit(1)
-            
-            logger.info("✅ Step 3 Complete: Database initialized successfully")
-            
-            # Step 4: Start Userbot Service
-            logger.info("🤖 Step 4: Starting userbot service...")
-            userbot_success = await self.start_userbot_service()
-            
-            if not userbot_success:
-                logger.error("❌ Step 4 Failed: Userbot service failed to start")
-                sys.exit(1)
-            
-            logger.info("✅ Step 4 Complete: Userbot service started")
-            
-            # Step 5: Start Control Bot
-            logger.info("🎛️ Step 5: Starting control bot service...")
-            self.control_bot_thread = threading.Thread(target=self.start_control_bot_service, daemon=True)
+            # Start control bot in separate thread
+            logger.info("🎛️ Starting control bot...")
+            self.control_bot_thread = threading.Thread(
+                target=self.start_control_bot_service, 
+                daemon=True
+            )
             self.control_bot_thread.start()
             
-            # Wait for control bot to initialize
-            await asyncio.sleep(3)
+            # Wait for services to initialize
+            await asyncio.sleep(8)
             
-            if self.control_bot_thread.is_alive():
-                logger.info("✅ Step 5 Complete: Control bot service started")
-            else:
-                logger.error("❌ Step 5 Failed: Control bot failed to start")
-                sys.exit(1)
+            logger.info("✅ All services started successfully!")
+            logger.info("🎯 System is now operational and ready to forward messages")
+            logger.info(f"🌐 Service available at: {os.getenv('KEEP_ALIVE_URL', 'Not configured')}")
             
-            # System Startup Complete
-            logger.info("=" * 60)
-            logger.info("🎉 SYSTEM STARTUP COMPLETED SUCCESSFULLY!")
-            logger.info("=" * 60)
-            logger.info("📊 System Status:")
-            logger.info("   • Flask Server: ✅ Running")
-            logger.info("   • Database: ✅ Connected")
-            logger.info("   • Userbot: ✅ Active")
-            logger.info("   • Control Bot: ✅ Online")
-            logger.info("   • Keep-Alive: ✅ Active")
-            logger.info("=" * 60)
-            logger.info("🌐 Service URLs:")
-            logger.info(f"   • Main: {os.getenv('KEEP_ALIVE_URL', 'Not configured')}")
-            logger.info(f"   • Health: {os.getenv('KEEP_ALIVE_URL', 'Not configured')}/health")
-            logger.info(f"   • Stats: {os.getenv('KEEP_ALIVE_URL', 'Not configured')}/stats")
-            logger.info("=" * 60)
-            
-            # Start system monitoring
-            await self.monitor_system_health()
-            
-        except KeyboardInterrupt:
-            logger.info("👋 Received keyboard interrupt")
-            await self.shutdown_system()
+            # Start monitoring services
+            await self.monitor_services()
             
         except Exception as e:
-            logger.error(f"❌ Critical system startup error: {e}")
-            logger.error("💡 Check logs above for specific error details")
+            logger.error(f"❌ System startup error: {e}")
             await self.shutdown_system()
             raise
     
     async def shutdown_system(self):
         """Gracefully shutdown the system"""
-        logger.info("🛑 Initiating graceful system shutdown...")
+        logger.info("🛑 Initiating system shutdown...")
         self.running = False
         
         try:
             # Stop userbot
-            from userbot import userbot
-            if userbot.is_running:
+            if hasattr(userbot, 'is_running') and userbot.is_running:
                 await userbot.stop_userbot()
                 logger.info("✅ Userbot stopped")
             
-            # Cancel any running tasks
+            # Cancel userbot task
             if self.userbot_task and not self.userbot_task.done():
                 self.userbot_task.cancel()
                 try:
                     await self.userbot_task
                 except asyncio.CancelledError:
-                    pass
+                    logger.info("✅ Userbot task cancelled")
             
             logger.info("✅ System shutdown completed successfully")
             
@@ -309,25 +219,18 @@ class TelegramForwarderSystem:
             logger.error(f"❌ Error during shutdown: {e}")
     
     def handle_signal(self, signum, frame):
-        """Handle system signals for graceful shutdown"""
-        logger.info(f"📡 Received system signal {signum} - initiating shutdown")
-        asyncio.create_task(self.shutdown_system())
+        """Handle system signals"""
+        logger.info(f"📡 Received signal {signum} - initiating shutdown")
+        # Create shutdown task in event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.shutdown_system())
 
 async def main():
     """Main application entry point"""
-    # ASCII Art Banner
-    print("""
-    ╔════════════════════════════════════════════════════════════╗
-    ║                                                            ║
-    ║        🤖 TELEGRAM AUTO-FORWARDER SYSTEM 🤖                ║
-    ║                                                            ║
-    ║        ⚡ Real-time Message Forwarding                     ║
-    ║        🔄 24/7 Operation on Render                         ║
-    ║        🛡️  Session String Authentication                   ║
-    ║        💾 PostgreSQL Database                              ║
-    ║                                                            ║
-    ╚════════════════════════════════════════════════════════════╝
-    """)
+    logger.info("=" * 60)
+    logger.info("🤖 TELEGRAM AUTO-FORWARDER SYSTEM")
+    logger.info("=" * 60)
     
     # Create system instance
     system = TelegramForwarderSystem()
@@ -337,34 +240,37 @@ async def main():
     signal.signal(signal.SIGTERM, system.handle_signal)
     
     try:
-        # Check Python version compatibility
-        if sys.version_info < (3, 8):
-            logger.error("❌ Python 3.8+ required for this application")
-            sys.exit(1)
-        
         # Start the complete system
-        await system.start_complete_system()
+        await system.start_system()
         
     except KeyboardInterrupt:
-        logger.info("👋 Application interrupted by user")
+        logger.info("👋 Received keyboard interrupt")
         await system.shutdown_system()
         
     except Exception as e:
-        logger.error(f"❌ Fatal application error: {e}")
+        logger.error(f"❌ Critical system error: {e}")
         await system.shutdown_system()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    try:
+        # Check Python version
+        if sys.version_info < (3, 8):
+            logger.error("❌ Python 3.8+ required")
+            sys.exit(1)
+        
+        logger.info(f"🐍 Python {sys.version}")
+        logger.info("🚀 Starting application...")
+        
+        # Run the main application
+        asyncio.run(main())
+        
+    except KeyboardInterrupt:
+        logger.info("👋 Application interrupted by user")
+        
+    except Exception as e:
+        logger.error(f"❌ Fatal error: {e}")
         sys.exit(1)
         
     finally:
         logger.info("💤 Application terminated")
-
-if __name__ == "__main__":
-    try:
-        logger.info("🎯 Starting main application...")
-        asyncio.run(main())
-        
-    except KeyboardInterrupt:
-        logger.info("👋 Main interrupted by user")
-        
-    except Exception as e:
-        logger.error(f"❌ Main execution error: {e}")
-        sys.exit(1)
