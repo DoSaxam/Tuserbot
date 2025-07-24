@@ -1,4 +1,4 @@
-pyrogram==2.0.159
+pyrogram==2.0.106
 TgCrypto==1.2.5
 python-telegram-bot==21.5
 flask==3.0.0
