@@ -5,7 +5,6 @@ import time
 import requests
 from flask import Flask, jsonify, request
 from datetime import datetime
-import asyncio
 import signal
 import sys
 
@@ -32,6 +31,11 @@ stats = {
 bot_process = None
 should_restart = False
 
+def update_bot_status(status):
+    """Update bot status from external process"""
+    stats['bot_status'] = status
+    logger.info(f"Bot status updated to: {status}")
+
 @app.route('/')
 def index():
     """Root endpoint with comprehensive system info"""
@@ -55,7 +59,9 @@ def index():
             'continue': '/continue',
             'restart': '/restart',
             'maintenance': '/maintenance',
-            'ping': '/ping'
+            'ping': '/ping',
+            'logs': '/logs',
+            'webhook': '/webhook'
         },
         'timestamp': datetime.utcnow().isoformat()
     })
@@ -375,29 +381,6 @@ def webhook():
                 'timestamp': datetime.utcnow().isoformat()
             })
         
-        elif webhook_type == 'maintenance':
-            maintenance_action = data.get('action', 'toggle')
-            
-            if maintenance_action == 'enable':
-                stats['maintenance_mode'] = True
-                stats['status'] = 'maintenance'
-                stats['bot_status'] = 'paused'
-            elif maintenance_action == 'disable':
-                stats['maintenance_mode'] = False
-                stats['status'] = 'running'
-                stats['bot_status'] = 'active'
-            else:
-                stats['maintenance_mode'] = not stats['maintenance_mode']
-            
-            logger.info(f"Maintenance mode {maintenance_action} via webhook")
-            
-            return jsonify({
-                'status': 'success',
-                'message': f'Maintenance mode {maintenance_action}',
-                'maintenance_mode': stats['maintenance_mode'],
-                'timestamp': datetime.utcnow().isoformat()
-            })
-        
         else:
             return jsonify({
                 'status': 'error',
@@ -470,11 +453,6 @@ def format_uptime(seconds):
     else:
         return f"{seconds}s"
 
-def update_bot_status(status):
-    """Update bot status from external process"""
-    stats['bot_status'] = status
-    logger.info(f"Bot status updated to: {status}")
-
 def run_keep_alive():
     """Run the Flask app to keep the service alive"""
     port = int(os.environ.get('PORT', 8080))
@@ -501,11 +479,14 @@ def run_keep_alive():
 
 def start_keep_alive_thread():
     """Start keep-alive server in a separate thread"""
-    thread = threading.Thread(target=run_keep_alive, daemon=True)
+    def run_server():
+        run_keep_alive()
+    
+    thread = threading.Thread(target=run_server, daemon=True)
     thread.start()
     logger.info("Keep-alive thread started")
     
-    # Update status after a short delay
+    # Update status after delay
     def update_status():
         time.sleep(5)
         stats['status'] = 'running'
