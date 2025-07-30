@@ -180,8 +180,7 @@ class Database:
                     source_id, destination_id
                 )
                 
-                task_id = await result.fetchval() if hasattr(result, 'fetchval') else None
-                logger.info(f"Added/Updated task: {source_id} -> {destination_id} (ID: {task_id})")
+                logger.info(f"Added/Updated task: {source_id} -> {destination_id}")
                 return True
                 
         except Exception as e:
