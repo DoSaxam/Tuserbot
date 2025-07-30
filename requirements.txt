@@ -1,66 +1,66 @@
 # Core Telegram Bot Libraries
-pyrogram==2.0.106
-TgCrypto==1.2.5
+pyrogram
+TgCrypto
 
 # Database
-asyncpg==0.29.0
+asyncpg
 
 # Web Server (Keep Alive)
-Flask==3.0.0
-gunicorn==21.2.0
+Flask
+gunicorn
 
 # System Monitoring
-psutil==5.9.6
+psutil
 
 # File Operations
-aiofiles==23.2.1
+aiofiles
 
 # Environment Variables
-python-dotenv==1.0.0
+python-dotenv
 
 # Web Framework Dependencies
-Werkzeug==3.0.1
-itsdangerous==2.1.2
-click==8.1.7
-blinker==1.7.0
-Jinja2==3.1.2
-MarkupSafe==2.1.3
+Werkzeug
+itsdangerous
+click
+blinker
+Jinja2
+MarkupSafe
 
 # HTTP Requests (for webhooks and monitoring)
-requests==2.31.0
-urllib3==2.1.0
+requests
+urllib3
 
 # JSON Processing
-simplejson==3.19.2
+simplejson
 
 # Async Processing
-asyncio-mqtt==0.13.0
-aiohttp==3.9.1
-aiosignal==1.3.1
-frozenlist==1.4.0
-multidict==1.6.0
-yarl==1.9.4
+asyncio-mqtt
+aiohttp
+aiosignal
+frozenlist
+multidict
+yarl
 
 # Error Handling and Retry
-tenacity==8.2.3
+tenacity
 
 # Date and Time Processing
-python-dateutil==2.8.2
+python-dateutil
 
 # Performance Optimization
-ujson==5.8.0
-cchardet==2.1.7
+ujson
+cchardet
 
 # Security
-cryptography==41.0.8
-pyOpenSSL==23.3.0
+cryptography
+pyOpenSSL
 
 # Process Management
-supervisor==4.2.5
+supervisor
 
 # Memory Optimization
-memory-profiler==0.61.0
-pympler==0.9
+memory-profiler
+pympler
 
 # Development and Debugging (optional)
-colorlog==6.8.0
+colorlog
