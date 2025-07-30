@@ -1,95 +1,74 @@
 import asyncio
-import logging
 import functools
+import logging
+import os
+from datetime import datetime
 from pyrogram.errors import FloodWait
 
-logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+def setup_logging():
+    """Configure logging"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('bot.log'),
+            logging.StreamHandler()
+        ]
+    )
 
-def with_retry(func):
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        for attempt in range(3):
-            try:
-                return await func(*args, **kwargs)
-            except FloodWait as e:
-                logger.warning(f"FloodWait: Sleeping for {e.x} seconds")
-                await asyncio.sleep(e.x)
-            except Exception as e:
-                logger.error(f"Retry {attempt + 1} failed: {e}")
-                if attempt == 2:
-                    raise
-                await asyncio.sleep(2 ** attempt)
-    return wrapper
+def log_message(message: str):
+    """Log message with timestamp"""
+    logging.info(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
 
-async def notify_admin(client, message):
-    if client:
-        try:
-            await client.send_message(int(os.environ["ADMIN_ID"]), f"Error: {message}")
-        except Exception as e:
-            logger.error(f"Failed to notify admin: {e}")off  
-    return wrapper  
-  
-# FloodWait handler  
-def handle_floodwait(func):  
-    async def wrapper(*args, **kwargs):  
-        try:  
-            return await func(*args, **kwargs)  
-        except Exception as e:  
-            if "FloodWait" in str(e):  
-                wait_time = int(str(e).split()[-1])  
-                logger.warning(f"FloodWait detected, sleeping {wait_time}s")  
-                await asyncio.sleep(wait_time + 5)  
-                return await func(*args, **kwargs)  
-            raise  
-    return wrapper  
-  
-# Admin notifications  
-async def notify_admin(message: str):  
-    try:  
-        async with Client(  
-            "notify",  
-            api_id=os.getenv("API_ID"),  
-            api_hash=os.getenv("API_HASH"),  
-            bot_token=os.getenv("BOT_TOKEN")  
-        ) as bot:  
-            await bot.send_message(  
-                chat_id=int(os.getenv("ADMIN_ID")),  
-                text=message  
-            )  
-    except Exception as e:  
-        logger.error(f"Failed to notify admin: {str(e)}")  
-  
-# Resource monitor  
-async def resource_monitor():  
-    while True:  
-        mem = psutil.virtual_memory()  
-        cpu = psutil.cpu_percent()  
-          
-        if mem.percent > 80:  
-            logger.warning(f"High memory usage: {mem.percent}%")  
-            await notify_admin(f"🚨 High memory usage: {mem.percent}%")  
-          
-        if cpu > 90:  
-            logger.warning(f"High CPU usage: {cpu}%")  
-            await notify_admin(f"🚨 High CPU usage: {cpu}%")  
-          
-        await asyncio.sleep(300)  # Check every 5 minutes  
-  
-# Health endpoint for web process  
-async def health_handler(request):  
-    return web.Response(text="OK")  
-  
-# Sanitization helpers  
-def sanitize_id(value):  
-    try:  
-        return abs(int(value))  
-    except:  
-        return None  
-  
-def validate_source(source):  
-    if not source:  
-        return False  
-    # Add more validation as needed  
-    return True
+def with_retry(attempts=3, delay=2):
+    """Retry decorator with exponential backoff"""
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+            
+            for attempt in range(attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except FloodWait as e:
+                    wait_time = e.value + 1
+                    log_message(f"FloodWait: {wait_time}s on attempt {attempt + 1}")
+                    await asyncio.sleep(wait_time)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < attempts - 1:
+                        wait_time = delay * (2 ** attempt)
+                        log_message(f"Retry {attempt + 1}/{attempts} after {wait_time}s: {e}")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        log_message(f"Final attempt failed: {e}")
+            
+            raise last_exception
+        return wrapper
+    return decorator
 
+async def notify_admin(client, message: str):
+    """Send notification to admin"""
+    try:
+        admin_id = int(os.environ["ADMIN_ID"])
+        await client.send_message(admin_id, f"🤖 **Bot Alert**\n\n{message}")
+    except Exception as e:
+        log_message(f"Failed to notify admin: {e}")
+
+def validate_chat_id(chat_id_str: str) -> int:
+    """Validate and convert chat ID"""
+    try:
+        chat_id = int(chat_id_str)
+        if abs(chat_id) < 1000000000:  # Basic validation
+            raise ValueError("Invalid chat ID format")
+        return chat_id
+    except ValueError:
+        raise ValueError("Chat ID must be a valid integer")
+
+def format_file_size(size_bytes: int) -> str:
+    """Format file size in human readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
