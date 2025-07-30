@@ -4,6 +4,7 @@ import os
 import time
 import psutil
 import json
+import threading
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
@@ -14,7 +15,6 @@ from pyrogram.errors import FloodWait, ChannelPrivate, ChatAdminRequired, UserNo
 
 from database import Database
 from utils import setup_logging, retry_on_failure, send_admin_notification, ResourceMonitor, RateLimiter, MessageValidator, ConfigValidator
-from keep_alive import start_keep_alive_thread
 
 # Setup logging
 logger = setup_logging()
@@ -674,9 +674,6 @@ class TelegramForwarder:
         try:
             logger.info("Starting Telegram Forwarder...")
             
-            # Start Flask keep-alive server
-            start_keep_alive_thread()
-            
             # Initialize database
             await self.db.connect()
             
@@ -695,6 +692,10 @@ class TelegramForwarder:
             monitor_task = asyncio.create_task(self._monitor_resources())
             self.worker_tasks.append(monitor_task)
             
+            # Update keep-alive status
+            from keep_alive import update_bot_status
+            update_bot_status('active')
+            
             # Send startup notification
             await send_admin_notification(
                 self.control_bot, self.ADMIN_ID,
@@ -709,6 +710,8 @@ class TelegramForwarder:
             
         except Exception as e:
             logger.error(f"Startup error: {e}")
+            from keep_alive import update_bot_status
+            update_bot_status('failed')
             await send_admin_notification(
                 self.control_bot, self.ADMIN_ID,
                 f"❌ Startup failed: {str(e)}"
@@ -722,6 +725,10 @@ class TelegramForwarder:
             
             # Stop accepting new messages
             self.is_running = False
+            
+            # Update keep-alive status
+            from keep_alive import update_bot_status
+            update_bot_status('stopping')
             
             # Send shutdown notification
             await send_admin_notification(
@@ -749,14 +756,34 @@ class TelegramForwarder:
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
 
-if __name__ == "__main__":
-    forwarder = TelegramForwarder()
-    
+# Global forwarder instance for Flask integration
+forwarder_instance = None
+
+def start_telegram_bot():
+    """Start Telegram bot in async context"""
+    global forwarder_instance
     try:
-        asyncio.run(forwarder.start())
+        forwarder_instance = TelegramForwarder()
+        asyncio.run(forwarder_instance.start())
     except KeyboardInterrupt:
         logger.info("Received shutdown signal")
-        asyncio.run(forwarder.stop())
+        if forwarder_instance:
+            asyncio.run(forwarder_instance.stop())
     except Exception as e:
         logger.error(f"Fatal error: {e}")
-        asyncio.run(forwarder.stop())
+        if forwarder_instance:
+            asyncio.run(forwarder_instance.stop())
+
+if __name__ == "__main__":
+    # Start Flask server in background thread (for Render single process)
+    from keep_alive import start_keep_alive_thread
+    
+    logger.info("Starting Flask server in background...")
+    flask_thread = start_keep_alive_thread()
+    
+    # Small delay to let Flask start
+    time.sleep(2)
+    
+    # Start the main Telegram bot
+    logger.info("Starting Telegram bot...")
+    start_telegram_bot()
