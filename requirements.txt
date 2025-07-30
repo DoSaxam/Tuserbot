@@ -49,7 +49,6 @@ python-dateutil
 
 # Performance Optimization
 ujson
-cchardet
 
 # Security
 cryptography
