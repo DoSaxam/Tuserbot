@@ -1,3 +1,3 @@
-web: gunicorn --bind 0.0.0.0:$PORT keep_alive.py:app
+web: gunicorn --bind 0.0.0.0:$PORT keep_alive.py
 worker: python main.py
 worker: python control_bot.py
