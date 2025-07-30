@@ -76,8 +76,6 @@ class ResourceMonitor:
         self.process = psutil.Process()
         self.cpu_history = deque(maxlen=30)  # Store last 30 readings
         self.memory_history = deque(maxlen=30)
-        self.disk_history = deque(maxlen=10)
-        self.network_history = deque(maxlen=10)
         
         # Baseline measurements
         self.start_time = time.time()
@@ -115,44 +113,6 @@ class ResourceMonitor:
         except Exception as e:
             logging.error(f"Error getting CPU usage: {e}")
             return 0.0
-    
-    def get_disk_usage(self) -> Dict[str, float]:
-        """Get disk usage information"""
-        try:
-            disk_usage = psutil.disk_usage('/')
-            usage_info = {
-                'total_gb': disk_usage.total / (1024**3),
-                'used_gb': disk_usage.used / (1024**3),
-                'free_gb': disk_usage.free / (1024**3),
-                'percent': (disk_usage.used / disk_usage.total) * 100
-            }
-            self.disk_history.append({
-                'value': usage_info,
-                'timestamp': time.time()
-            })
-            return usage_info
-        except Exception as e:
-            logging.error(f"Error getting disk usage: {e}")
-            return {'total_gb': 0, 'used_gb': 0, 'free_gb': 0, 'percent': 0}
-    
-    def get_network_stats(self) -> Dict[str, int]:
-        """Get network I/O statistics"""
-        try:
-            net_io = psutil.net_io_counters()
-            stats = {
-                'bytes_sent': net_io.bytes_sent,
-                'bytes_recv': net_io.bytes_recv,
-                'packets_sent': net_io.packets_sent,
-                'packets_recv': net_io.packets_recv
-            }
-            self.network_history.append({
-                'value': stats,
-                'timestamp': time.time()
-            })
-            return stats
-        except Exception as e:
-            logging.error(f"Error getting network stats: {e}")
-            return {'bytes_sent': 0, 'bytes_recv': 0, 'packets_sent': 0, 'packets_recv': 0}
     
     def get_average_memory(self, minutes: int = 5) -> float:
         """Get average memory usage over specified minutes"""
@@ -204,54 +164,6 @@ class ResourceMonitor:
         """Get system uptime in human readable format"""
         uptime_seconds = time.time() - self.start_time
         return format_duration(uptime_seconds)
-    
-    def get_memory_trend(self) -> str:
-        """Get memory usage trend (increasing/decreasing/stable)"""
-        if len(self.memory_history) < 5:
-            return "insufficient_data"
-        
-        recent_values = [entry['value'] for entry in list(self.memory_history)[-5:]]
-        
-        if recent_values[-1] > recent_values[0] * 1.1:
-            return "increasing"
-        elif recent_values[-1] < recent_values[0] * 0.9:
-            return "decreasing"
-        else:
-            return "stable"
-    
-    def force_garbage_collection(self):
-        """Force Python garbage collection"""
-        import gc
-        collected = gc.collect()
-        logging.info(f"Garbage collection freed {collected} objects")
-        return collected
-    
-    def get_detailed_stats(self) -> Dict[str, Any]:
-        """Get comprehensive system statistics"""
-        return {
-            'memory': {
-                'current_mb': self.get_memory_usage(),
-                'average_5min_mb': self.get_average_memory(5),
-                'trend': self.get_memory_trend(),
-                'warning_threshold': self.memory_warning_threshold,
-                'critical_threshold': self.memory_critical_threshold,
-                'is_warning': self.is_memory_warning(),
-                'is_critical': self.is_memory_critical()
-            },
-            'cpu': {
-                'current_percent': self.get_cpu_usage(),
-                'average_5min_percent': self.get_average_cpu(5),
-                'warning_threshold': self.cpu_warning_threshold,
-                'critical_threshold': self.cpu_critical_threshold,
-                'is_warning': self.is_cpu_warning(),
-                'is_critical': self.is_cpu_critical()
-            },
-            'disk': self.get_disk_usage(),
-            'network': self.get_network_stats(),
-            'uptime': self.get_uptime(),
-            'process_threads': self.process.num_threads(),
-            'process_connections': len(self.process.connections())
-        }
 
 class RateLimiter:
     """Enhanced rate limiting for message forwarding"""
@@ -265,11 +177,6 @@ class RateLimiter:
         self.chat_counters = defaultdict(lambda: deque())
         
         self.flood_wait_until = {}  # Track flood wait times
-        self.permanent_bans = set()  # Track permanently banned chats
-        
-        # Adaptive rate limiting
-        self.success_rates = defaultdict(float)
-        self.error_counts = defaultdict(int)
         
         # Statistics
         self.total_messages_sent = 0
@@ -279,10 +186,6 @@ class RateLimiter:
     def can_send(self, chat_id: int) -> bool:
         """Check if we can send a message to this chat"""
         current_time = time.time()
-        
-        # Check permanent bans
-        if chat_id in self.permanent_bans:
-            return False
         
         # Check flood wait
         if chat_id in self.flood_wait_until:
@@ -294,16 +197,13 @@ class RateLimiter:
         # Clean old entries
         self._clean_old_entries(current_time)
         
-        # Adaptive rate limiting based on error rates
-        chat_limit = self._get_adaptive_limit(chat_id)
-        
         # Check global limit
         if len(self.global_counter) >= self.global_limit:
             self.total_messages_blocked += 1
             return False
         
         # Check per-chat limit
-        if len(self.chat_counters[chat_id]) >= chat_limit:
+        if len(self.chat_counters[chat_id]) >= self.chat_limit:
             self.total_messages_blocked += 1
             return False
         
@@ -315,48 +215,12 @@ class RateLimiter:
         self.global_counter.append(current_time)
         self.chat_counters[chat_id].append(current_time)
         self.total_messages_sent += 1
-        
-        # Update success rate
-        if chat_id in self.success_rates:
-            self.success_rates[chat_id] = (self.success_rates[chat_id] * 0.9) + (0.1 if success else 0.0)
-        else:
-            self.success_rates[chat_id] = 1.0 if success else 0.0
-        
-        # Update error count
-        if not success:
-            self.error_counts[chat_id] += 1
     
     def set_flood_wait(self, chat_id: int, wait_time: int):
         """Set flood wait for a specific chat"""
         self.flood_wait_until[chat_id] = time.time() + wait_time
         self.total_flood_waits += 1
         logging.warning(f"Flood wait set for chat {chat_id}: {wait_time} seconds")
-    
-    def ban_chat_permanently(self, chat_id: int):
-        """Permanently ban a chat from rate limiting"""
-        self.permanent_bans.add(chat_id)
-        logging.error(f"Chat {chat_id} permanently banned from rate limiter")
-    
-    def unban_chat(self, chat_id: int):
-        """Remove permanent ban from a chat"""
-        self.permanent_bans.discard(chat_id)
-        if chat_id in self.flood_wait_until:
-            del self.flood_wait_until[chat_id]
-        logging.info(f"Chat {chat_id} unbanned from rate limiter")
-    
-    def _get_adaptive_limit(self, chat_id: int) -> int:
-        """Get adaptive rate limit based on success rate"""
-        base_limit = self.chat_limit
-        success_rate = self.success_rates.get(chat_id, 1.0)
-        error_count = self.error_counts.get(chat_id, 0)
-        
-        # Reduce limit if success rate is low or error count is high
-        if success_rate < 0.5 or error_count > 10:
-            return max(5, int(base_limit * 0.3))  # Reduce to 30% of base limit
-        elif success_rate < 0.8 or error_count > 5:
-            return max(10, int(base_limit * 0.6))  # Reduce to 60% of base limit
-        
-        return base_limit
     
     def _clean_old_entries(self, current_time: float):
         """Remove entries older than the window"""
@@ -377,7 +241,7 @@ class RateLimiter:
                 del self.chat_counters[chat_id]
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get comprehensive rate limiting statistics"""
+        """Get rate limiting statistics"""
         current_time = time.time()
         self._clean_old_entries(current_time)
         
@@ -386,7 +250,6 @@ class RateLimiter:
             'global_limit': self.global_limit,
             'active_chats': len(self.chat_counters),
             'flood_waits_active': len(self.flood_wait_until),
-            'permanent_bans': len(self.permanent_bans),
             'total_messages_sent': self.total_messages_sent,
             'total_messages_blocked': self.total_messages_blocked,
             'total_flood_waits': self.total_flood_waits,
@@ -395,17 +258,6 @@ class RateLimiter:
                 max(1, self.total_messages_sent)
             ) * 100
         }
-    
-    def reset_chat_stats(self, chat_id: int):
-        """Reset statistics for a specific chat"""
-        if chat_id in self.chat_counters:
-            del self.chat_counters[chat_id]
-        if chat_id in self.success_rates:
-            del self.success_rates[chat_id]
-        if chat_id in self.error_counts:
-            del self.error_counts[chat_id]
-        
-        logging.info(f"Reset rate limiting stats for chat {chat_id}")
 
 class MessageValidator:
     """Enhanced input validation and sanitization"""
@@ -522,184 +374,6 @@ class MessageValidator:
         
         return len(var_value) > 0
 
-class PerformanceTracker:
-    """Enhanced performance tracking and analytics"""
-    
-    def __init__(self):
-        self.metrics = {
-            'messages_processed': 0,
-            'messages_forwarded': 0,
-            'messages_failed': 0,
-            'errors': 0,
-            'start_time': time.time(),
-            'last_reset': time.time()
-        }
-        
-        # Detailed tracking
-        self.hourly_stats = defaultdict(int)
-        self.error_types = defaultdict(int)
-        self.performance_history = deque(maxlen=1440)  # 24 hours of minute data
-        
-        # Response time tracking
-        self.response_times = deque(maxlen=1000)
-        self.queue_size_history = deque(maxlen=1000)
-    
-    def record_message_processed(self, response_time: float = 0):
-        """Record a processed message with response time"""
-        self.metrics['messages_processed'] += 1
-        current_hour = datetime.now().hour
-        self.hourly_stats[f'processed_{current_hour}'] += 1
-        
-        if response_time > 0:
-            self.response_times.append(response_time)
-    
-    def record_message_forwarded(self, success: bool = True):
-        """Record a forwarded message"""
-        if success:
-            self.metrics['messages_forwarded'] += 1
-            current_hour = datetime.now().hour
-            self.hourly_stats[f'forwarded_{current_hour}'] += 1
-        else:
-            self.metrics['messages_failed'] += 1
-    
-    def record_error(self, error_type: str = 'unknown'):
-        """Record an error with type classification"""
-        self.metrics['errors'] += 1
-        current_hour = datetime.now().hour
-        self.hourly_stats[f'errors_{current_hour}'] += 1
-        self.error_types[error_type] += 1
-    
-    def record_queue_size(self, size: int):
-        """Record current queue size"""
-        self.queue_size_history.append({
-            'size': size,
-            'timestamp': time.time()
-        })
-    
-    def get_uptime(self) -> str:
-        """Get system uptime"""
-        uptime_seconds = time.time() - self.metrics['start_time']
-        return format_duration(uptime_seconds)
-    
-    def get_success_rate(self) -> float:
-        """Get success rate percentage"""
-        total = self.metrics['messages_processed']
-        if total == 0:
-            return 100.0
-        
-        errors = self.metrics['errors'] + self.metrics['messages_failed']
-        return ((total - errors) / total) * 100.0
-    
-    def get_messages_per_minute(self) -> float:
-        """Get average messages per minute"""
-        uptime_minutes = (time.time() - self.metrics['start_time']) / 60
-        if uptime_minutes == 0:
-            return 0.0
-        
-        return self.metrics['messages_forwarded'] / uptime_minutes
-    
-    def get_average_response_time(self) -> float:
-        """Get average response time in seconds"""
-        if not self.response_times:
-            return 0.0
-        
-        return sum(self.response_times) / len(self.response_times)
-    
-    def get_peak_queue_size(self, minutes: int = 60) -> int:
-        """Get peak queue size in the last N minutes"""
-        if not self.queue_size_history:
-            return 0
-        
-        cutoff_time = time.time() - (minutes * 60)
-        recent_sizes = [
-            entry['size'] for entry in self.queue_size_history 
-            if entry['timestamp'] >= cutoff_time
-        ]
-        
-        return max(recent_sizes) if recent_sizes else 0
-    
-    def get_error_distribution(self) -> Dict[str, int]:
-        """Get distribution of error types"""
-        return dict(self.error_types)
-    
-    def get_hourly_stats(self) -> Dict[str, int]:
-        """Get hourly statistics"""
-        return dict(self.hourly_stats)
-    
-    def reset_daily_stats(self):
-        """Reset daily statistics"""
-        self.hourly_stats.clear()
-        self.error_types.clear()
-        self.metrics['last_reset'] = time.time()
-        logging.info("Daily statistics reset")
-    
-    def get_comprehensive_stats(self) -> Dict[str, Any]:
-        """Get comprehensive performance statistics"""
-        return {
-            'uptime': self.get_uptime(),
-            'messages': {
-                'processed': self.metrics['messages_processed'],
-                'forwarded': self.metrics['messages_forwarded'],
-                'failed': self.metrics['messages_failed'],
-                'per_minute': round(self.get_messages_per_minute(), 2)
-            },
-            'performance': {
-                'success_rate': round(self.get_success_rate(), 2),
-                'avg_response_time': round(self.get_average_response_time(), 3),
-                'peak_queue_size_1h': self.get_peak_queue_size(60)
-            },
-            'errors': {
-                'total': self.metrics['errors'],
-                'by_type': self.get_error_distribution()
-            },
-            'hourly_activity': self.get_hourly_stats()
-        }
-
-def format_bytes(bytes_value: int) -> str:
-    """Format bytes into human readable format"""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if bytes_value < 1024.0:
-            return f"{bytes_value:.1f}{unit}"
-        bytes_value /= 1024.0
-    return f"{bytes_value:.1f}TB"
-
-def format_duration(seconds: float) -> str:
-    """Format duration in seconds to human readable format"""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    elif seconds < 3600:
-        minutes = int(seconds // 60)
-        secs = int(seconds % 60)
-        return f"{minutes}m {secs}s"
-    elif seconds < 86400:
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        return f"{hours}h {minutes}m"
-    else:
-        days = int(seconds // 86400)
-        hours = int((seconds % 86400) // 3600)
-        return f"{days}d {hours}h"
-
-async def graceful_shutdown(tasks: list, timeout: int = 30):
-    """Gracefully shutdown async tasks"""
-    logging.info("Initiating graceful shutdown...")
-    
-    # Cancel all tasks
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-    
-    # Wait for tasks to complete with timeout
-    try:
-        await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=timeout
-        )
-    except asyncio.TimeoutError:
-        logging.warning("Some tasks didn't complete within timeout")
-    
-    logging.info("Graceful shutdown completed")
-
 class ConfigValidator:
     """Enhanced configuration validation"""
     
@@ -749,113 +423,31 @@ class ConfigValidator:
             'timestamp': datetime.now().isoformat()
         }
 
-class ErrorClassifier:
-    """Classify and handle different types of errors"""
-    
-    ERROR_TYPES = {
-        'network': ['ConnectionError', 'TimeoutError', 'NetworkError'],
-        'telegram': ['FloodWait', 'ChannelPrivate', 'ChatAdminRequired', 'UserNotParticipant'],
-        'database': ['DatabaseError', 'ConnectionFailure', 'IntegrityError'],
-        'permission': ['PermissionError', 'Forbidden', 'Unauthorized'],
-        'rate_limit': ['TooManyRequests', 'RateLimitExceeded'],
-        'system': ['MemoryError', 'DiskError', 'ResourceExhausted']
-    }
-    
-    @staticmethod
-    def classify_error(error: Exception) -> str:
-        """Classify error type based on exception"""
-        error_name = error.__class__.__name__
-        error_message = str(error).lower()
-        
-        for error_type, error_classes in ErrorClassifier.ERROR_TYPES.items():
-            if error_name in error_classes:
-                return error_type
-            
-            # Check error message for keywords
-            if error_type in error_message or any(
-                keyword.lower() in error_message for keyword in error_classes
-            ):
-                return error_type
-        
-        return 'unknown'
-    
-    @staticmethod
-    def get_recovery_strategy(error_type: str) -> Dict[str, Any]:
-        """Get recovery strategy based on error type"""
-        strategies = {
-            'network': {
-                'retry': True,
-                'max_retries': 3,
-                'delay': 5,
-                'exponential_backoff': True
-            },
-            'telegram': {
-                'retry': True,
-                'max_retries': 2,
-                'delay': 30,
-                'notify_admin': True
-            },
-            'database': {
-                'retry': True,
-                'max_retries': 5,
-                'delay': 2,
-                'reconnect': True
-            },
-            'permission': {
-                'retry': False,
-                'disable_task': True,
-                'notify_admin': True
-            },
-            'rate_limit': {
-                'retry': True,
-                'max_retries': 1,
-                'delay': 60,
-                'reduce_rate': True
-            },
-            'system': {
-                'retry': False,
-                'restart_required': True,
-                'notify_admin': True
-            }
-        }
-        
-        return strategies.get(error_type, {
-            'retry': True,
-            'max_retries': 1,
-            'delay': 10
-        })
+def format_bytes(bytes_value: int) -> str:
+    """Format bytes into human readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if bytes_value < 1024.0:
+            return f"{bytes_value:.1f}{unit}"
+        bytes_value /= 1024.0
+    return f"{bytes_value:.1f}TB"
 
-# Utility functions for common operations
-def safe_int(value: Any, default: int = 0) -> int:
-    """Safely convert value to integer"""
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        return default
-
-def safe_float(value: Any, default: float = 0.0) -> float:
-    """Safely convert value to float"""
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return default
-
-def truncate_text(text: str, max_length: int = 100, suffix: str = "...") -> str:
-    """Truncate text to specified length"""
-    if len(text) <= max_length:
-        return text
-    return text[:max_length - len(suffix)] + suffix
+def format_duration(seconds: float) -> str:
+    """Format duration in seconds to human readable format"""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{minutes}m {secs}s"
+    elif seconds < 86400:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h {minutes}m"
+    else:
+        days = int(seconds // 86400)
+        hours = int((seconds % 86400) // 3600)
+        return f"{days}d {hours}h"
 
 def get_timestamp() -> str:
     """Get current timestamp in ISO format"""
     return datetime.now().isoformat()
-
-def create_error_context(func_name: str, error: Exception, **kwargs) -> Dict[str, Any]:
-    """Create error context for logging"""
-    return {
-        'function': func_name,
-        'error_type': error.__class__.__name__,
-        'error_message': str(error),
-        'timestamp': get_timestamp(),
-        'context': kwargs
-    }
